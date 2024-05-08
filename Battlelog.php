@@ -1,10 +1,8 @@
 <?php
 
-/**
- * Class BattlelogException
- * @package Battlelog
- */
-class BattlelogException extends Exception {}
+namespace Battlelog;
+
+use Exception;
 
 /**
  * Class Battlelog
@@ -14,305 +12,303 @@ class BattlelogException extends Exception {}
  * You can request the return value as json or array format
  *
  * @author Zam
- * @website http://www.probegriffeln.de
- * @required PHP 5.4+ (<7.0)
+ * @website ***
+ * @required PHP >=8.3
  * @version 0.6
- * @updated 2016/09/19
+ * @updated 2024/05/08
  * @package Battlelog
  *
- * Todo: Add alternative caching methods like memcache/xcache
+ * Usage:
+ * $BattleLog = new BattleLog();
+ * $data = $BattleLog->getPlayerData(); - returns player data
+ * $data = $BattleLog->getServerData(); - returns server data
+ *
+ * Options:
+ * $BattleLog->useCache(false); - deactivate cache
+ * $BattleLog->setCacheDirectory('/path/to/cache'); - set cache directory
+ * $BattleLog->setUserAgent('...'); - set user agent
+ *
+ * Hint: This class isn't finished and isn't working, because the API is not available anymore
+ * Todo: Add alternative caching methods like memcache/xcache (Obsolete now)
  */
 class Battlelog
 {
-    protected static $_instance;
-
-    private $_sBattleLogUrl               = '';
-    private $_sServerGUID                 = '';
-
-    /**
-     * @var array
-     */
-    private $_aValidGameIdList            = ['bf3','bf4','bfh','bf1'];
-    /**
-     * @var array
-     */
-    private $_aValidReturnTypes           = ['json','array'];
-
-    /**
-     * @var string
-     * file cache dir without final slash
-     * Todo: Add alternative caching methods like memcache/xcache
-     */
-    protected $sCacheDir                  = './cache';
-    /**
-     * @var string
-     * php owner on your server
-     */
-    protected $sServerChown               = 'www-data';
-    /**
-     * @var bool
-     * Set false if you want to deactivate cach
-     */
-    protected $bCacheContent              = true;
     /**
      * @var int
      * Cache for server data in Seconds
      */
-    protected $iServerInfoCacheTimeout    = 600;
+    const int CACHE_TIMEOUT = 600;
+
     /**
-     * @var int
-     * Cache for Player / GAme data in Seconds
+     * @var string
+     * php owner on your working directory
      */
-    protected $iGameInfoCacheTimeout      = 0;
+    protected string $directoryOwner = 'www-data';
+
+    protected static Battlelog $instance;
+
     /**
      * @var string
      */
-    protected $sUserAgent                 = '';
+    protected string $battleLogUrl = '';
+    protected string $serverGUID = '';
+    /**
+     *  file cache dir without slash
+     *  Todo: Add alternative caching methods like memcache/xcache
+     **/
+    protected string $cacheDirectory = './cache';
 
     /**
-     * @param string $sUrlString
+     * @var array
      */
-    final function __construct( $sUrlString = '' )
+    protected array $validGameIdList = ['bf3', 'bf4', 'bfh', 'bf1'];
+    protected array $validReturnTypes = ['json', 'array'];
+
+    /**
+     * @var bool
+     * Set false if you want to deactivate cache
+     */
+    protected bool $cacheContent = true;
+
+    /**
+     * @var int
+     * Cache for Player / Game data in seconds
+     */
+    protected int $gameInfoCacheTimeout = 0;
+    /**
+     * @var string
+     */
+    protected string $userAgent = 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:54.0) Gecko/20100101 Firefox/54.0';
+
+    /**
+     * @param string $url
+     * @param string $cacheDirectory
+     */
+    public function __construct(string $url = '', string $cacheDirectory = '')
     {
-        if ( $sUrlString !== '' ) {
-            $this->_sBattleLogUrl = trim(strtolower($sUrlString));
+        if ($url !== '') {
+            $this->battleLogUrl = trim(strtolower($url));
         }
 
-        $sPregGUID = '((([a-f0-9]+){4,12}\-?){5})';
-        $sGameID = 'bf4';
+        $regexGUID = '((([a-f0-9]+){4,12}-?){5})';
+        $gameID = 'bf4';
 
-        $sPregString = '#^https?:\/\/battlelog\.battlefield\.com\/('
-            . implode('|', $this->_aValidGameIdList)
-            . ')(\/[a-z]{2})?\/servers\/show\/pc\/'
-            . $sPregGUID
-            . '\/?.*?$#';
+        $regexString = '#^https?://battlelog\.battlefield\.com/('
+            . implode('|', $this->validGameIdList)
+            . ')(/[a-z]{2})?/servers/show/pc/'
+            . $regexGUID
+            . '/?.*?$#';
 
-        if ( preg_match($sPregString, $this->_sBattleLogUrl, $aMatch) ) {
-            $sGameID = trim($aMatch[1]);
-            $this->_sServerGUID = trim($aMatch[3]);
+        if (preg_match($regexString, $this->battleLogUrl, $match)) {
+            $gameID = trim($match[1]);
+            $this->serverGUID = trim($match[3]);
         }
 
-        if ( !preg_match('#^'.$sPregGUID.'$#', $this->_sServerGUID) || !in_array($sGameID, $this->_aValidGameIdList)) {
-            $this->_error( 'No valid battlelog url found' );
+        if (!preg_match('#^' . $regexGUID . '$#', $this->serverGUID) || !in_array($gameID, $this->validGameIdList)) {
+            $this->error('No valid battlelog url found');
         }
 
-    } // end __construct
+        $this->setUserAgent();
+        $this->setCacheDirectory($cacheDirectory ?: $this->cacheDirectory);
+    }
 
     /**
-     * @param string $sCacheDir
+     * @param string $cacheDirectory
+     * @return void
      */
-    final public function setCacheDir( $sCacheDir = '' ) {
-        if ( strlen($sCacheDir) > 1 ) {
-            $this->sCacheDir = preg_replace('#\.\.\/#', './', $sCacheDir);
+    public function setCacheDirectory(string $cacheDirectory = ''): void
+    {
+        if (strlen($cacheDirectory) > 1) {
+            $this->cacheDirectory = preg_replace('#[.]{2}/#', './', $cacheDirectory);
         }
     } // end public function setCacheDir
 
     /**
-     * @param string $sUserAgent
+     * @param string $userAgent
+     * @return void
      */
-    final public function setUserAgent( $sUserAgent = '' ) {
-        if ( strlen($sUserAgent) > 1 ) {
-            $this->sUserAgent = $sUserAgent;
-        }
-    } // end public function setUserAgent
+    public function setUserAgent(string $userAgent = ''): void
+    {
+        $this->userAgent = (strlen($userAgent) > 1
+            ? $userAgent
+            : ($_SERVER['HTTP_USER_AGENT'] ?: getenv('HTTP_USER_AGENT')))
+            ?: $this->userAgent;
+    }
 
     /**
-     * @param bool|true $bState
+     * @param bool $state
+     * @return void
      */
-    final public function useCache( $bState = true ) {
-        $this->bCacheContent = (boolean)$bState;
-    } // end public function useCache
+    public function useCache(bool $state = true): void
+    {
+        $this->cacheContent = $state;
+    }
 
     /**
-     * @param string $sUrlString
-     * @return Battlelog
-     */
-    static public function getInstance($sUrlString = '') {
-        if(!is_object(self::$_instance)) {
-            self::$_instance = new self($sUrlString);
-        }
-        return self::$_instance;
-    } // end static public function getInstance
-
-    /**
-     * @param string $sCacheFileName
+     * @param string $cacheFileName
      * @return string
      */
-    final private function _getCacheFilePath( $sCacheFileName = 'sServerInfoCache' )
+    private function getCacheFilePath(string $cacheFileName = 'serverInfoCache'): string
     {
-        if ( !is_dir($this->sCacheDir) ) {
-            if ( !mkdir($this->sCacheDir) ) {
-                $this->_error( 'Unable to create cache directory: ' . realpath($this->sCacheDir) );
+        if (!is_dir($this->cacheDirectory)) {
+            if (!mkdir($this->cacheDirectory)) {
+                $this->error('Unable to create cache directory: ' . realpath($this->cacheDirectory));
             } else {
-                if ( $this->sServerChown ) {
-                    if ( !chown($this->sServerChown, $this->sCacheDir)
-                        || !chgrp($this->sServerChown, $this->sCacheDir)) {
-                        $this->_error( 'Could not change cache directory owner or group to ' . $this->sServerChown );
+                if ($this->directoryOwner) {
+                    if (!chown($this->directoryOwner, $this->cacheDirectory)
+                        || !chgrp($this->directoryOwner, $this->cacheDirectory)
+                    ) {
+                        $this->error('Could not change cache directory owner or group to ' . $this->directoryOwner);
                     }
                 }
             }
         }
-        return $this->sCacheDir . '/cache-'.md5($this->_sServerGUID . $sCacheFileName);
-
-    } // end private function _getCacheFilePath
-
-    /**
-     * @param string $sErrorString
-     * @throws BattlelogException
-     */
-    final private function _error( $sErrorString = '' ) {
-        //throw new BattlelogException((string)$sErrorString);
-        header('Content-Type: text/plain;');
-        die((string)$sErrorString);
-    } // end private function _error
+        return $this->cacheDirectory . '/cache-' . md5($this->serverGUID . $cacheFileName);
+    }
 
     /**
-     * @param string $sUrlString
-     * @param string $sReturnType
-     * @return mixed|string
+     * @param string $errorString
+     * @return void
      */
-    final public static function getDataNow($sUrlString = '', $sReturnType = 'array') {
-        $oInstance = self::getInstance($sUrlString);
-        return $oInstance->getData( $sReturnType );
-    } // end public static function getDataNow
-
-    /**
-     * @param string $sUrl
-     * @return mixed|string
-     */
-    final private function _getDataFromUrl( $sUrl = '' )
+    private function error(string $errorString): void
     {
-        if ( !$sUrl ) {
-            $this->_error('Please enter a valid battlelog url');
-        }
+        header('Content-Type: text/plain;');
+        exit($errorString);
+    }
 
-        $sUserAgent = $this->sUserAgent?:($_SERVER['HTTP_USER_AGENT']?:getenv('HTTP_USER_AGENT'));
+    /**
+     * @param string $url
+     * @return string
+     */
+    private function getDataFromUrl(string $url): string
+    {
+        $this->setUserAgent();
 
-        if ( function_exists('curl_init') ) {
+        $content = '';
 
-            $ch = curl_init();
+        if (function_exists('curl_init')) {
+            try {
+                $ch = curl_init();
 
-            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 5);
-            curl_setopt($ch, CURLOPT_HEADER, $sUserAgent);
-            curl_setopt($ch, CURLOPT_URL, $sUrl);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+                curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+                curl_setopt($ch, CURLOPT_HEADER, $this->userAgent);
+                curl_setopt($ch, CURLOPT_URL, $url);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
 
-            if ( ($sError = curl_error($ch)) ) {
+                if (($error = curl_error($ch))) {
+                    curl_close($ch);
+                    $this->error('Error: ' . $error);
+                }
+
+                $content = curl_exec($ch);
+            } catch (Exception $e) {
+                $this->error('Error: ' . $e->getMessage());
+            } finally {
                 curl_close($ch);
-                $this->_error('Error: ' . $sError);
             }
-
-            $sContent = curl_exec($ch);
-            curl_close($ch);
-
-        }
-        else {
+        } else {
             // file content version
-            $aHeaderData = ['Accept-language: de', "User-Agent: {$sUserAgent}"];
+            $aHeaderData = ['Accept-language: de', "User-Agent: $this->userAgent"];
             $aContextOptions = [
                 'http' => [
-                    'method' 	=> 'GET',
-                    'user_agent'=> $sUserAgent,
-                    'header' 	=> implode("\r\n", $aHeaderData) . "\r\n",
+                    'method' => 'GET',
+                    'user_agent' => $this->userAgent,
+                    'header' => implode("\r\n", $aHeaderData) . "\r\n",
                 ]
             ];
-            $oContext = stream_context_create($aContextOptions);
-            $sContent = file_get_contents( $sUrl, false, $oContext );
-            unset($aHeaderData, $aContextOptions, $oContext);
+            $context = stream_context_create($aContextOptions);
+            $content = file_get_contents($url, false, $context);
+
+            unset($aHeaderData, $aContextOptions, $context);
         }
 
-        return $sContent;
-    } // end private function _getDataFromUrl
+        return $content;
+    }
 
     /**
-     * @param string $sCacheName
-     * @param int $iTimeout in Seconds
-     * @param string $sRequestUrl
-     * @return mixed|string
+     * @param string $cacheName
+     * @param int $cacheTimeout
+     * @param string $requestUrl
+     * @return false|string
      */
-    final private function _getContent( $sCacheName = '', $iTimeout = 300, $sRequestUrl = '')
+    private function getContent(string $cacheName = '', int $cacheTimeout = 0, string $requestUrl = ''): false|string
     {
-        if (!$this->bCacheContent ) {
-            $iTimeout = 0;
+        if (!$requestUrl && !$cacheName) {
+            $this->error('No valid request');
         }
 
-        $sContent   = '';
-        $sCachePath = $this->_getCacheFilePath($sCacheName);
+        $timeout = (!$this->cacheContent) ? 0 : $cacheTimeout;
+
+        $content = '';
+        $cachePath = $this->getCacheFilePath($cacheName);
 
         // Get data from battlelog or cache
-
-        if ( is_file($sCachePath) ) {
-            if ( time()-filemtime($sCachePath) > $iTimeout ) {
-                unlink($sCachePath);
+        if (is_file($cachePath)) {
+            if (time() - filemtime($cachePath) > $timeout) {
+                unlink($cachePath);
             }
-            $sContent = file_get_contents($sCachePath);
+            $content = file_get_contents($cachePath);
         }
 
-        if ( !$sContent || !$iTimeout ) {
-            $sContent = $this->_getDataFromUrl($sRequestUrl);
+        if (!$content || !$timeout) {
+            $content = $this->getDataFromUrl($requestUrl);
         }
 
-        if ( $iTimeout && $sContent !== "" ) {
-            @file_put_contents($sCachePath, $sContent) or $this->_error('Unable to write cache file');
+        if ($timeout && !empty($content)) {
+            @file_put_contents($cachePath, $content) || $this->error('Unable to write cache file');
         }
 
-        return $sContent;
-
-    } // end private function _getContent
+        return $content;
+    }
 
     /**
-     * @param string $sReturnType
-     * @return array|bool|mixed|string
+     * @param string $returnType
+     * @return mixed
      */
-    final public function getPlayerData( $sReturnType = 'array' )
+    public function getPlayerData(string $returnType = 'array'): mixed
     {
-        if ( !$this->_sBattleLogUrl ) {
-            $this->_error( 'No valid battlelog url found' );
+        if (!$this->battleLogUrl) {
+            $this->error('No valid battlelog url found');
         }
 
-        $sRequestUrl    = 'http://keeper.battlelog.com/snapshot/' . $this->_sServerGUID . '/';
-        $sContent       = $this->_getContent('sGameInfoCache', $this->iGameInfoCacheTimeout, $sRequestUrl);
-        $aArrayData     = json_decode($sContent, true);
+        $requestUrl = 'https://keeper.battlelog.com/snapshot/' . $this->serverGUID . '/';
+        $content = $this->getContent('sGameInfoCache', $this->gameInfoCacheTimeout, $requestUrl);
+        $arrayData = json_decode($content, true) ?? [];
 
-        if ( !is_array($aArrayData) ) {
+        if (empty($arrayData)) {
             return false;
         }
 
-        if ( !in_array($sReturnType, $this->_aValidReturnTypes)) {
-            $sReturnType = 'array';
+        if (!in_array($returnType, $this->validReturnTypes)) {
+            $returnType = 'array';
         }
 
-        // Return
-        return ( $sReturnType === 'json' ) ? $sContent : $aArrayData;
-
-    } // end public function getPlayerData
+        return ($returnType === 'json') ? $content : $arrayData;
+    }
 
     /**
-     * @param string $sReturnType
-     * @return array|bool|mixed|string
+     * @param string $returnType
+     * @return mixed
      */
-    final public function getServerData( $sReturnType = 'array' )
+    public function getServerData(string $returnType = 'array'): mixed
     {
-        if ( !$this->_sBattleLogUrl ) {
-            $this->_error( 'No valid battlelog url found' );
+        if (!$this->battleLogUrl) {
+            $this->error('No valid battlelog url found');
         }
 
-        $sRequestUrl    = $this->_sBattleLogUrl . '?json=1';
-        $sContent       = $this->_getContent('sServerInfoCache', $this->iServerInfoCacheTimeout, $sRequestUrl);
-        $aArrayData     = json_decode($sContent, true);
+        $requestUrl = $this->battleLogUrl . '?json=1';
+        $content = $this->getContent('serverInfoCache', self::CACHE_TIMEOUT, $requestUrl);
+        $arrayData = json_decode($content, true) ?? [];
 
-        if ( !is_array($aArrayData) ) {
+        if (empty($arrayData)) {
             return false;
         }
 
-        if ( !in_array($sReturnType, $this->aValidReturnTypes)) {
-            $sReturnType = 'array';
+        if (!in_array($returnType, $this->validReturnTypes)) {
+            $returnType = 'array';
         }
 
-        // Return
-        return ( $sReturnType === 'json' ) ? $sContent : $aArrayData;
-
-    } // end public function getServerData
-
-} // end class
+        return ($returnType === 'json') ? $content : $arrayData;
+    }
+}
